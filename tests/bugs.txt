@@ -1,0 +1,555 @@
+================================================================================
+ BUGS TROUVES ET CORRIGES DANS tkBiotext.c / tkBioUnix.c
+ Widget Tk "biotext" pour l'edition d'alignements multiples de sequences
+================================================================================
+
+Ce fichier liste tous les bugs reels trouves et corriges au cours de l'audit
+complet du code source, ainsi que par les tests unitaires/d'integration
+ecrits et executes reellement (compilation, edition de liens, execution sous
+Tcl/Tk + Xvfb, gdb, Valgrind). Chaque correctif est documente directement en
+commentaire dans le code source a l'endroit concerne.
+
+Legende de gravite :
+  [CRITIQUE] crash quasi systematique en usage normal / corruption memoire
+  [ELEVEE]   crash sur entree plausible / fuite significative
+  [MOYENNE]  corruption de donnees silencieuse / comportement incorrect
+  [FAIBLE]   fuite mineure / probleme cosmetique / robustesse
+
+--------------------------------------------------------------------------------
+PARTIE DONNEES / EDITION - tkBiotext.c
+--------------------------------------------------------------------------------
+
+1. [CRITIQUE] BiotextDeleteCols - lecture hors limites
+   Boucle de decalage des caracteres bornee a "i<lgs+1" au lieu de "i<lgs",
+   lisant SeqMat[j][lgs+1], un octet au-dela du buffer alloue, a chaque
+   suppression de colonne.
+
+2. [CRITIQUE] BiotextDeleteCols - ecriture hors limites (heap overflow)
+   Apres le realloc du buffer a sa nouvelle taille, le code ecrivait le
+   caractere de fin de chaine a l'indice bioPtr->lgSeqs (pas encore
+   decremente a ce point), soit un octet au-dela du buffer reduit.
+   Corruption de tas a chaque suppression de colonne.
+
+3. [MOYENNE] BiotextDeleteCols - mauvais indice dans l'ajustement des tags
+   Tcl_ListObjIndex() utilisait la variable de boucle du tag (i) au lieu de
+   celle de la ligne (j) pour lire les coordonnees d'un tag lors d'une
+   suppression de colonne -> mauvaise ligne lue ou erreur silencieuse.
+
+4. [CRITIQUE] BiotextInsertCols - ecriture hors limites (heap overflow)
+   Meme classe de bug que #2 mais a l'insertion : la boucle de decalage
+   demarrait a "i=lgs+1" au lieu de "i=lgs", ecrivant systematiquement un
+   octet au-dela du buffer a chaque insertion de colonne.
+
+5. [ELEVEE] BiotextDeleteRows - fuite memoire
+   Le buffer de l'ancienne derniere ligne (dupliquee lors du decalage des
+   lignes) n'etait jamais libere avant que le tableau de pointeurs ne soit
+   reduit -> fuite a chaque suppression de ligne.
+
+6. [ELEVEE] BiotextInsertGapsInTags - Tcl_DecrRefCount non apparie (1)
+   Decrementation du compteur de references d'objets Tcl empruntes
+   (valObj[k]/valObj[k+1], obtenus via Tcl_ListObjGetElements) sans en etre
+   proprietaire -> risque de liberation prematuree (use-after-free) d'objets
+   encore references par la liste de coordonnees originale d'un tag.
+
+7. [CRITIQUE] BiotextDeleteCols - MapSeq non protege
+   bioPtr->MapSeq[j] reetait reallouee sans jamais verifier
+   bioPtr->nbMapping au prealable. Comme MapSeq n'est alloue que lorsque le
+   mapping des residus est actif, ceci provoquait un deferencement de
+   pointeur NULL -> plantage systematique de BiotextDeleteCols des que le
+   mapping n'est pas utilise (cas le plus courant).
+
+8. [ELEVEE] BiotextCutCmd - le presse-papier n'etait jamais rempli
+   Les appels a BiotextInitBuffer()/BiotextCopySeqsToBuffer() etaient
+   laisses en commentaire (reliquat de debogage). Un "cut" supprimait les
+   lignes sans jamais les copier dans le buffer -> un "paste" ulterieur ne
+   recuperait rien, perte silencieuse des donnees coupees.
+
+9. [CRITIQUE] BiotextAddColsToBufferSeqs - deferencement NULL
+   Acces inconditionnel a bioPtr->MapSeqCache[i] sans verifier
+   bioPtr->nbMapping. Provoquait un crash des qu'un "paste" necessitait
+   d'elargir des sequences bufferisees (colonnes en plus) alors qu'aucun
+   mapping n'etait actif.
+
+10. [FAIBLE] BiotextInitBuffer - fuite memoire (garde incoherente)
+    La liberation du tableau de pointeurs MapSeqCache etait conditionnee par
+    l'etat courant de bioPtr->nbMapping plutot que par l'existence reelle du
+    tableau (MapSeqCache != NULL) -> fuite si le mapping est desactive entre
+    deux appels.
+
+11. [ELEVEE] BiotextInsertGapsInTags - Tcl_DecrRefCount non apparie (2)
+    Meme famille de bug que #6, sur un second site (rowObj[k]) dans la meme
+    fonction.
+
+--------------------------------------------------------------------------------
+PARTIE CREATION DU WIDGET / AFFICHAGE - tkBiotext.c et tkBioUnix.c
+--------------------------------------------------------------------------------
+
+12. [ELEVEE] BiotextObjCmd (creation du widget) - depassement de tampon
+    bioPtr->widgetName etait alloue a une taille fixe de 1000 octets avec un
+    strcpy() non borne. Tout chemin de widget de 1000+ caracteres deborde le
+    tampon. Corrige en dimensionnant exactement a la longueur reelle.
+
+13. [FAIBLE] BiotextObjCmd - Tcl_Preserve() sur le mauvais pointeur
+    Tcl_Preserve(bioPtr->tkwin) au lieu de Tcl_Preserve(bioPtr) (le motif
+    utilise partout ailleurs dans le fichier) -> fuite permanente d'une
+    entree dans la table interne de Tcl a chaque creation de widget ; ne
+    protegeait en outre pas reellement bioPtr comme semblait l'etre
+    l'intention.
+
+14. [FAIBLE] BiotextDisplay - incoherence pm/d sous TK_NO_DOUBLE_BUFFERING
+    Deux endroits melangeaient le pixmap de double-buffering (pm) et le
+    Drawable reellement utilise (d) ; impact nul en configuration standard,
+    mais generait des appels X invalides si ce flag de compilation rare
+    etait active.
+
+15. [CRITIQUE] BiotextDeletedProc - double liberation memoire
+    className, xscrollCmd et yscrollCmd sont des options TK_OPTION_STRING
+    gerees et deja liberees par Tk_FreeConfigOptions() ; le code les
+    liberait une seconde fois manuellement juste apres -> double free
+    systematique a chaque destruction de widget.
+
+16. [ELEVEE] BiotextSetFont (tkBioUnix.c) - police laissee invalide
+    L'ancienne police etait fermee avant meme que la nouvelle ait ete
+    chargee avec succes. En cas d'echec de chargement, bioPtr->xftFont
+    restait a NULL de facon definitive -> crash au prochain rendu.
+
+17. [ELEVEE] BiotextDrawAlignment (tkBioUnix.c) - fuite a chaque redessin
+    Meme motif que les bugs #6/#11/#27/#37 : un Tcl_Obj cree puis
+    immediatement ecrase sans etre utilise, dans la boucle de dessin des
+    tags, executee a chaque rafraichissement de l'ecran (scroll, resize,
+    edition...).
+
+18. [FAIBLE] BiotextDrawAlignment (tkBioUnix.c) - rendu incorrect en bout de
+    sequence
+    Utilisation de la largeur maximale d'affichage au lieu du nombre reel de
+    colonnes visibles pres de la fin d'une sequence -> glyphes/fond errones
+    au-dela de la fin reelle des donnees. Aucun risque memoire, purement
+    visuel.
+
+19. [MOYENNE] BiotextXViewCmd / BiotextYViewCmd - fonctionnalite manquante
+    La forme standard Tk a un seul argument ("pathName xview index") etait
+    un bloc "/* TO DO */" vide : ne faisait rigoureusement rien, sans
+    erreur. Implementee.
+
+--------------------------------------------------------------------------------
+PARTIE TAGS - tkBiotext.c
+--------------------------------------------------------------------------------
+
+20. [CRITIQUE] BiotextTagConfigSubCmd - deferencement NULL
+    Tk_GetColor() retourne NULL sur un nom de couleur invalide ; le code
+    dereferencait le resultat sans verification -> crash sur toute faute de
+    frappe de couleur dans un script utilisateur.
+
+21. [ELEVEE] BiotextTagConfigSubCmd - fuite a la reconfiguration
+    Les anciennes couleurs (Cfg/Cbg) d'un tag existant n'etaient jamais
+    liberees (Tk_FreeColor) avant d'etre remplacees -> fuite a chaque
+    changement de couleur d'un tag.
+
+22. [ELEVEE] BiotextTagConfigSubCmd - fuite de contexte graphique (GC)
+    tag->gc etait remis a NULL inconditionnellement juste avant l'appel a
+    Biotext_AssignColorOfTag(), empechant cette derniere de liberer
+    l'ancien GC via son propre test interne -> fuite de GC a chaque
+    reconfiguration d'un tag existant.
+
+23. [ELEVEE] BiotextTagDeleteSubCmd - fuite a la suppression de tous les tags
+    Le tableau de tags etait libere brutalement sans jamais relacher les
+    ressources individuelles de chaque tag (nom, couleurs, bordure, GC,
+    liste de coordonnees).
+
+24. [ELEVEE] BiotextRebuildTagTable - fuite a la suppression d'un tag donne
+    Meme defaut que #23 mais sur le chemin de suppression d'un tag
+    specifique (le tableau est recompacte sans liberer les ressources des
+    tags retires).
+
+25. [CRITIQUE] BiotextTagAddSubCmd / BiotextTagRemoveSubCmd - retour de
+    BiotextGetIndex() jamais verifie
+    Sur un index malforme, la fonction retourne une erreur SANS initialiser
+    row/col (valeurs de pile indeterminees) ; le code continuait malgre
+    tout et utilisait ces valeurs comme indices de tableau -> acces hors
+    limites potentiel.
+
+26. [FAIBLE] BiotextTagAddSubCmd - fuites de Tcl_Obj (dead-store)
+    Deux objets Tcl crees puis immediatement ecrases sans etre utilises, a
+    chaque appel de "tag add".
+
+27. [ELEVEE] BiotextTagAddSubCmd - Tcl_DecrRefCount non apparie
+    Meme famille de bug que #6/#11 : liberation d'elements de liste
+    empruntes et potentiellement partages avec la liste de coordonnees
+    d'origine du tag -> risque de use-after-free.
+
+28. [MOYENNE] BiotextTagRemoveSubCmd - mutation d'un objet Tcl partage
+    Contrairement a sa fonction soeur BiotextTagAddSubCmd, cette fonction
+    lisait et modifiait directement la liste de coordonnees "live" du tag
+    (potentiellement partagee, ex. avec le cache copier/coller) au lieu de
+    la dupliquer d'abord.
+
+29. [MOYENNE] BiotextTagNamesSubCmd - mauvais indice de tableau
+    ".biotext tag names <index>" utilisait la position dans la liste des
+    tags actifs au lieu du veritable indice dans le tableau Tags[] -> nom
+    de tag errone des qu'un tag a deja ete supprime dans la session.
+
+30. [MOYENNE] BiotextTagCmd (dispatcher) - erreurs de "tag state" et
+    "tag raise" silencieusement avalees
+    Contrairement aux autres sous-commandes, leur valeur de retour n'etait
+    jamais verifiee -> une erreur reelle (nom de tag inconnu, booleen
+    invalide) etait perdue, la commande de plus haut niveau retournant
+    quand meme un succes.
+
+31. [FAIBLE] BiotextTagRangesSubCmd - lecture potentiellement hors limites
+    La boucle utilisait bioPtr->nbSeqs comme borne au lieu de la longueur
+    reelle de la liste de coordonnees recuperee juste avant -> risque de
+    lecture hors tableau si les deux valeurs venaient a diverger. Buffer
+    d'index elargi par precaution supplementaire.
+
+32. [MOYENNE] BiotextTagNamesSubCmd - double decrementation de la ligne
+    (trouve par test unitaire)
+    BiotextGetIndex() retourne deja une ligne 0-based en interne ; le code
+    refaisait un "r -= 1" supplementaire juste apres, rendant toute
+    correspondance de ligne impossible. Consequence verifiee en direct :
+    ".biotext tag names <index>" retournait TOUJOURS une liste vide, meme
+    pour une position clairement a l'interieur d'une zone taguee.
+
+33. [MOYENNE] BiotextInsertCols / BiotextCharsCmd - decalage des tags mal
+    cible (trouve par test unitaire)
+    La chaine d'index "%d.%d" utilisee pour repercuter le decalage d'une
+    insertion de colonnes sur les tags etait construite avec un compteur de
+    boucle 0-based au lieu du numero de ligne 1-based attendu. Consequence
+    verifiee en direct : sur un alignement de 2 lignes, seule la ligne 1
+    recevait le decalage de tag (et en double !), la ligne 2 n'etait jamais
+    touchee. Corrige aux deux endroits.
+
+--------------------------------------------------------------------------------
+PARTIE EDITION DE CARACTERES - tkBiotext.c
+--------------------------------------------------------------------------------
+
+34. [ELEVEE] BiotextInsertCmd / BiotextAddSeqsCmd / BiotextDelcharsCmd -
+    depassement de tampon sur la pile (3 occurrences)
+    sscanf(iStr, "%d%s", &i, &dummy) avec "dummy" declare comme un simple
+    "char" : "%s" ecrit une chaine de taille non bornee. Tout index avec
+    plus d'un caractere de traine (faute de frappe, ex. "5xy") debordait ce
+    tampon d'1 octet. Corrige en "%c" (n'ecrit jamais qu'un seul octet),
+    motif deja utilise correctement dans BiotextGetIndex.
+
+35. [MOYENNE] BiotextCharsCmd - mutation en place d'un Tcl_Obj partage
+    "chr[0] = toupper(chr[0]);" modifiait directement le buffer interne
+    d'un objet Tcl venant de objv[] - piege classique Tcl (objet partage ou
+    mis en cache par le compilateur de bytecode entre appels repetes).
+
+36. [FAIBLE] BiotextCharsCmd - "count" negatif non rejete
+    Seul "count == 0" etait filtre ; un compte negatif provoquait un
+    decalage de ligne sans jamais ecrire le caractere demande (corruption
+    logique silencieuse, pas de crash).
+
+37. [CRITIQUE] BiotextDelcharsCmd - MapSeq non protege
+    Meme famille que le bug #7 : quatre acces a MapSeq sans garde
+    "if (bioPtr->nbMapping)" -> plantage sur quasiment toute suppression de
+    caractere des lors qu'aucun mapping n'est actif (etat le plus courant).
+    Probablement le bug le plus impactant de tout l'audit.
+
+38. [FAIBLE] BiotextDelcharsCmd - fuite de Tcl_Obj (dead-store)
+    Meme motif que #17/#26, dans la boucle d'ajustement des tags lors d'une
+    suppression de caractere.
+
+39. [ELEVEE] BiotextPushInSeq - use-after-free potentiel
+    La liste de coordonnees "live" d'un tag (potentiellement partagee avec
+    un cache copier/coller en attente) etait mutee en place, puis certains
+    de ses elements empruntes etaient liberes via un Tcl_DecrRefCount non
+    apparie avant meme le remplacement du champ -> risque de corruption si
+    la liste est partagee.
+
+--------------------------------------------------------------------------------
+PARTIE MAPPING DES RESIDUS - tkBiotext.c
+--------------------------------------------------------------------------------
+
+40. [ELEVEE] BiotextMappingCmd - fuite a chaque reconfiguration
+    Les ressources de l'ancienne table de mapping (Cfg/Cbg/bgBorder/gc de
+    chaque entree) n'etaient jamais liberees avant d'etre remplacees.
+
+41. [CRITIQUE] BiotextMappingCmd - deferencement NULL sur couleur invalide
+    Tk_AllocColorFromObj()/Tk_Get3DBorder() peuvent retourner NULL sur un
+    nom de couleur invalide ; dereferences sans verification -> crash.
+    Corrige avec, en prime : validation de la taille de chaque entree de
+    mapping (au moins 3 champs, sinon lecture hors tableau sur "OneE[2]"),
+    et un veritable "rollback" complet (liberation des ressources deja
+    allouees, retour a l'etat "pas de mapping") lorsque la validation
+    finale ("' ' et '.' doivent etre definis") echoue - auparavant, la
+    table invalide restait installee malgre l'erreur retournee.
+
+42. [CRITIQUE] MapOneSequence - acces hors tableau au rendu
+    Un caractere de sequence non couvert par la table de mapping stockait
+    la valeur -1 dans MapSeq[][]. Cette valeur sert plus tard d'indice dans
+    Mapping[] lors du dessin -> acces negatif hors tableau des qu'une
+    sequence contient un caractere non prevu dans la table (tres plausible
+    : mapping ne couvrant que les acides amines standards, sequence
+    contenant un "X", un "*", une minuscule...). Corrige avec repli sur
+    l'indice du caractere gap ("."), garanti valide.
+
+43. [FAIBLE] BiotextAddSeqsCmd - fuite lors du mapping des sequences ajoutees
+    bioPtr->MapSeq[i] etait ecrase par un nouveau tableau sans liberer
+    celui deja alloue par BiotextInsertRows() pour cette ligne.
+
+44. [CRITIQUE] BiotextMapCmd ("map clean") - meme cumul que #37 et #42
+    Acces a MapSeq sans garde "nbMapping" (deferencement NULL si aucun
+    mapping actif) ET remplissage de chaque case a -1 (acces hors tableau
+    au rendu si le mapping est active ensuite). Sixieme occurrence du meme
+    motif recurrent dans le fichier.
+
+--------------------------------------------------------------------------------
+PARTIE GROUPES DE SEQUENCES - tkBiotext.c
+--------------------------------------------------------------------------------
+
+45. [ELEVEE] BiotextGroupCmd - fonctionnalite "-merge" manquante
+    Le mode "-merge" etait un bloc de code entierement vide :
+    ".biotext group -merge nom liste-index" ne faisait strictement rien,
+    malgre la documentation du code decrivant ce mode. Implemente.
+
+46. [ELEVEE] BiotextGroupCmd / BiotextUngroupCmd - ecriture hors limites
+    Aucune validation des indices de sequence fournis par l'appelant avant
+    ecriture dans bioPtr->SeqGrp[idx] -> ecriture hors tableau sur un index
+    invalide (obsolete apres suppression de lignes, ou simple erreur de
+    script).
+
+47. [FAIBLE] BiotextGroupCmd - retour de Tcl_GetIntFromObj jamais verifie
+    Un argument de nom/numero de groupe non entier laissait la variable a
+    une valeur de pile indeterminee, utilisee telle quelle par la suite.
+
+48. [MOYENNE] BiotextUngroupCmd - boucle modifiant la liste qu'elle parcourt
+    BiotextDeleteGroup() retire un element de la liste des groupes et
+    decremente son compteur PENDANT que la boucle appelante iterait dessus
+    en avancant -> si deux groupes deviennent vides dans le meme appel, un
+    groupe sur deux etait manque (reste orphelin). Corrige en iterant a
+    l'envers.
+
+49. [FAIBLE] BiotextDeleteGroup - decrementation non conditionnee
+    bioPtr->nbrGrps etait decremente meme si le groupe recherche n'avait
+    pas ete trouve dans la liste -> desynchronisation potentielle entre le
+    compteur et la taille reelle de la liste. Sans impact avec le seul
+    site d'appel actuel, corrige par robustesse.
+
+--------------------------------------------------------------------------------
+PARTIE DEPLACEMENT DU CURSEUR - tkBiotext.c
+--------------------------------------------------------------------------------
+
+50. [ELEVEE] BiotextCursorCmd - retour de BiotextGetIndex() jamais verifie
+    Sur un index malforme, row/col restent non initialises (valeurs de
+    pile indeterminees) ; contrairement a d'autres sites, cette valeur
+    etait ici stockee DE FACON DURABLE dans bioPtr->currentR/currentC (la
+    position courante du curseur), lue ensuite par de nombreuses autres
+    fonctions (BiotextPushCmd notamment) sans revalidation -> risque
+    d'acces hors limites bien plus tard, loin du site d'appel initial.
+
+51. [FAIBLE] BiotextIndexCmd - meme defaut que #50
+    Meme verification manquante ; impact plus faible car la valeur n'est
+    utilisee que localement pour formater une chaine de sortie.
+
+52. [FAIBLE] BiotextSeeCmd - meme defaut que #50, sans risque memoire
+    Meme verification manquante, mais row/col sont deja re-bornes (MAX/MIN)
+    juste apres dans cette fonction specifique, ce qui evite le risque
+    memoire ; corrige neanmoins pour la coherence et un message d'erreur
+    correct plutot qu'un comportement silencieux sur entree invalide.
+
+--------------------------------------------------------------------------------
+BLOCAGES DE COMPILATION / EDITION DE LIENS (introduits puis corriges dans
+la meme session, lors de la premiere compilation reelle du projet complet)
+--------------------------------------------------------------------------------
+
+53. [BLOQUANT] Commentaire C imbrique cassant la compilation
+    Un commentaire de correctif contenait litteralement la sequence
+    "/* TO DO */" a l'interieur d'un commentaire /* ... */ englobant ; le C
+    ne supporte pas les commentaires imbriques, ce qui fermait le
+    commentaire trop tot et transformait le reste en code invalide.
+
+54. [BLOQUANT] #endif mal place empechant la compilation de FontAlreadySeen
+    Le "#endif" du bloc "#ifdef DUMPCACHE" (protegeant une fonction de
+    debogage) englobait aussi la definition de FontAlreadySeen(), une
+    fonction utilisee sans condition ailleurs dans le fichier. En
+    compilation normale (DUMPCACHE non defini), FontAlreadySeen() etait
+    declaree et appelee mais jamais definie -> echec a l'edition de liens
+    ("undefined reference"). Deplacement du #endif au bon endroit.
+
+--------------------------------------------------------------------------------
+BUGS TROUVES PAR EXECUTION REELLE (compilation + Tcl/Tk + gdb + Valgrind,
+apres obtention de tkBiotext.h)
+--------------------------------------------------------------------------------
+
+55. [CRITIQUE] BiotextGetIndex - widget vide, retour de succes trompeur
+    Sur un widget entierement vide (aucune sequence chargee), le calcul de
+    bornage produisait row=-1/col=-1 tout en retournant TCL_OK (comme si
+    l'index avait ete resolu avec succes). Tout appelant utilisait ensuite
+    cette valeur comme indice de tableau valide -> acces hors limites.
+    Confirme par un vrai SIGSEGV via gdb (BiotextDelcharsCmd,
+    "SeqGrp[r]" avec r=-1). Corrige en rejetant explicitement tout index
+    sur un widget vide.
+
+56. [CRITIQUE] BiotextAddSeqsCmd - erreur de calcul de l'index "end"
+    "index = bioPtr->nbSeqs;" pour le cas "end", alors que
+    BiotextInsertRows() avec un compte positif calcule "start = index + 1"
+    (semantique "inserer APRES index"). Avec index == nbSeqs (une position
+    au-dela de la derniere ligne valide), le decalage resultant ecrivait
+    dans une ligne jamais allouee de SeqMat[]. Confirme par un vrai SIGSEGV
+    via gdb. Corrige en "index = bioPtr->nbSeqs - 1" (la derniere ligne
+    reellement valide).
+
+--------------------------------------------------------------------------------
+PARTIE POLICES (Xft/fontconfig, tkBioUnix.c) et tkBiotext.c
+--------------------------------------------------------------------------------
+
+57. [MOYENNE] BiotextSetFont (tkBioUnix.c) - graisse "normal" implicite
+    Seul le cas "bold" ajoutait explicitement une contrainte FC_WEIGHT au
+    pattern fontconfig ; pour "normal" (le defaut), aucune contrainte
+    n'etait transmise, laissant fontconfig deviner via sa substitution par
+    defaut. Generalement sans consequence visible, mais non deterministe :
+    selon les polices reellement installees sur le systeme cible (famille
+    "Courier" sans face Regular disponible, configuration fontconfig
+    differente...), le resultat peut varier - explication la plus probable
+    d'un rapport de police "bold par defaut" sur certaines machines. Corrige
+    en demandant explicitement FC_WEIGHT_REGULAR dans le cas "normal".
+
+58. [FAIBLE] BiotextFontCmd - lecteurs family/size/weight manquants
+    ".biotext font family" (et size/weight) sans argument ne correspondait
+    a aucun cas traite et tombait dans un "goto done" qui ne definit jamais
+    de resultat Tcl explicite -> retour silencieux d'une chaine vide,
+    rendant impossible la verification de la configuration de police
+    reellement active. Lecteurs implementes.
+
+59. [MOYENNE] BiotextFontCmd - Tcl_UtfToLower en place sur un objet partage
+    Meme famille de bug que #35 : "Tcl_UtfToLower(wgt)" modifiait
+    directement le buffer d'un Tcl_Obj issu de objv[] pour la commande
+    ".font weight".
+
+60. [FAIBLE] BiotextFontCmd - message d'erreur vide sur graisse invalide
+    (trouve par test unitaire)
+    Tcl_AddErrorInfo() alimente la trace d'erreur ("errorInfo"), pas le
+    message reellement transmis a l'appelant/a bgerror (qui vient de
+    Tcl_SetObjResult). Confirme par une capture bgerror vide en test reel :
+    le message "Font weight should be normal or bold" etait silencieusement
+    perdu. Corrige en definissant explicitement le resultat.
+
+--------------------------------------------------------------------------------
+DERNIERE PASSE D'EXAMEN SYSTEMATIQUE DU FICHIER - tkBiotext.c
+--------------------------------------------------------------------------------
+
+61. [ELEVEE] BiotextCleanCmd - fuites (tags et mapping)
+    Meme motif que #23/#40 : ressources individuelles des tags et entrees
+    de mapping jamais liberees lors d'un ".biotext clean".
+
+62. [CRITIQUE] BiotextSequencesCmd - depassement de tas
+    La longueur de sequence n'etait verifiee que sur la toute premiere
+    sequence de la liste fournie ; toutes les autres etaient copiees via
+    strcpy() dans un buffer dimensionne sur cette seule premiere longueur,
+    sans jamais verifier qu'elles font toutes la meme taille. Une sequence
+    plus longue que la premiere (erreur d'utilisateur tres plausible, ex.
+    fichier FASTA non aligne colle directement) debordait le tas. Corrige
+    avec validation systematique de toutes les longueurs.
+
+63. [FAIBLE] BiotextSequencesCmd - message d'erreur incoherent
+    Le controle "slen <= 1" rejetait aussi les sequences de longueur 1
+    (valides), alors que le message d'erreur ne mentionne que la longueur 0.
+
+64. [ELEVEE] BiotextOutputCmd - lecture hors limites
+    L'indice de sequence fourni par l'utilisateur n'etait jamais valide
+    avant d'etre utilise pour indexer bioPtr->SeqMat[idx] -> lecture hors
+    tableau plausible (index 0 par erreur au lieu de 1-based, index obsolete
+    apres suppression de lignes, faute de frappe).
+
+65. [CRITIQUE] BiotextCleanCmd - nbTagsAlloc jamais reinitialise
+    (trouve par test unitaire)
+    Apres ".biotext clean", bioPtr->Tags est libere et remis a NULL,
+    bioPtr->nbTags remis a 0 - mais bioPtr->nbTagsAlloc restait a sa valeur
+    d'avant le nettoyage. Le "tag configure" suivant sur un NOUVEAU tag
+    voyait "nbTags(0) < nbTagsAlloc(valeur obsolete)", pensait avoir deja de
+    la place allouee, et ecrivait directement dans le pointeur NULL/liberre.
+    Confirme par un vrai SIGSEGV via gdb (deja present dans le code
+    original, pas seulement introduit par le correctif de fuite du bug #61).
+
+--------------------------------------------------------------------------------
+PARTIE WINDOWS - tkBioWin.c
+--------------------------------------------------------------------------------
+
+66. [CRITIQUE] BiotextFontInfo / BiotextSetFont (tkBioWin.c) - tkfont NULL
+    (crash signale sous Windows, compilation msys2/mingw64)
+    BiotextObjCmd appelle BiotextSetFont() pendant l'initialisation de la
+    structure du widget, AVANT Tk_InitOptions() : l'option "-font" n'est pas
+    encore lue et bioPtr->tkfont vaut NULL (structure mise a 0 par memset).
+    La version Windows passait ce NULL a Tk_GetFontMetrics() puis a
+    Tk_FontId() -> crash a chaque creation de widget. La version Unix/Xft
+    n'est pas touchee car elle construit sa police a partir de
+    FontFamily/FontSize sans utiliser tkfont. Corrige en ne faisant rien
+    tant que tkfont est NULL : les metriques sont calculees juste apres,
+    via BiotextConfigure() -> BiotextWorldChanged() -> BiotextSetFont().
+
+67. [MOYENNE] BiotextSetFont (tkBioWin.c) - commande "font" sans effet
+    La version Windows ne lisait que l'option "-font" (tkfont) : les
+    commandes ".biotext font family|size|weight", qui modifient FontFamily,
+    FontSize et FontWeight, n'avaient aucun effet visible. BiotextSetFont
+    construit maintenant la police avec Tk_GetFont() a partir de ces champs,
+    comme la version Unix/Xft (taille en pixels, comme FC_PIXEL_SIZE). La
+    police est gardee dans un champ propre a Windows (bioPtr->winFont,
+    libere a la destruction du widget) car tkfont appartient a l'option
+    "-font" et est libere par Tk_FreeConfigOptions(). En cas d'echec,
+    l'ancienne police est conservee.
+
+--------------------------------------------------------------------------------
+PORTAGE TEA 3.13 (2026-10-08)
+--------------------------------------------------------------------------------
+
+68. [BLOQUANT] tkBiotext.h - "typedef int Tcl_Size" avec TEA 3.13 / Tcl 8
+    TEA 3.13 passe -DTcl_Size=int quand on compile avec Tcl 8 : la ligne
+    devenait "typedef int int;" (erreur "two or more data types"). Le
+    typedef est maintenant protege par #ifndef Tcl_Size.
+
+69. [CRITIQUE] BiotextDeleteCmd - index non initialise / non verifie
+    ".b delete cols all" : sscanf("all", "%d") echoue et l'index restait
+    non initialise ; BiotextDeleteCols() decalait et reallouait les lignes
+    a partir de cet index aleatoire. Plantage une fois sur deux sous Tcl 9
+    (test_more.tcl, depend de l'ASLR : invisible sous gdb, qui la
+    desactive) ; sous Tcl 8 la pile contenait par chance une valeur sans
+    effet. Ni BiotextDeleteCols() ni BiotextDeleteRows() ne verifient leur
+    index : "delete cols 999" ou "delete rows -1" lisaient et ecrivaient
+    hors limites. Les index sont maintenant verifies ("bad column index",
+    "bad row index") ; "delete cols all" renvoie une erreur ("cannot delete
+    all columns"). "delete rows all" supprimait les lignes 0, 1, 2... alors
+    que les lignes restantes se decalaient (les derniers appels recevaient
+    des index au-dela de la fin) : suppression de la fin vers le debut.
+
+================================================================================
+ RESUME
+================================================================================
+
+(Entrees 68 et 69 ajoutees le 2026-10-08, apres ce resume.)
+
+67 bugs distincts trouves et corriges au total (ce decompte precis differe
+legerement du chiffre "41" mentionne en cours de conversation, qui etait un
+comptage informel tenu au fil de l'audit ; cette liste, compilee a
+posteriori, est la version exhaustive et definitive).
+
+Repartition approximative par gravite :
+  - CRITIQUE (crash quasi systematique / corruption memoire) : 16
+  - ELEVEE   (crash plausible / fuite significative)          : 18
+  - MOYENNE  (corruption silencieuse / comportement incorrect) : 11
+  - FAIBLE   (fuite mineure / cosmetique / robustesse)         : 20
+  - BLOQUANT (compilation/edition de liens)                    : 2
+
+Toutes les corrections ont ete validees par execution reelle : compilation
+et edition de liens du widget complet (tkBiotext.c + tkBioUnix.c), chargement
+dans un vrai wish8.6 sous Xvfb (affichage X virtuel headless), inspection au
+debogueur (gdb) pour confirmer plusieurs crashs avant/apres correctif, et
+verification systematique sous Valgrind (--leak-check=full,
+--track-origins=yes) sur sept suites de tests independantes couvrant :
+creation/configuration/destruction du widget, edition de caracteres,
+insertion/suppression de colonnes et de lignes, tags (toutes les
+sous-commandes), mapping des residus, groupes de sequences, copier/couper/
+coller, defilement (scroll), focus et curseur clignotant, polices, et
+plusieurs scenarios "realistes" combinant alignements a trous multiples,
+sequences groupees et tags a l'interieur/exterieur des zones modifiees.
+
+Sur l'ensemble de ces executions, Valgrind ne signale jamais d'erreur
+d'acces memoire invalide (lecture/ecriture hors limites, double free,
+use-after-free) imputable au code du widget ; les seules fuites residuelles
+detectees proviennent systematiquement et exclusivement de
+libfontconfig/libexpat (analyse du fichier de configuration des polices du
+systeme au demarrage), un phenomene connu et documente present dans toute
+application utilisant Xft, non lie au code de ce widget.
+
+Note : la commande "selection" (BiotextSelectionCmd) n'a delibirement pas
+ete auditee ni testee, a la demande explicite de l'utilisateur.

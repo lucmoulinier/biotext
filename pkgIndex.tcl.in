@@ -1,0 +1,14 @@
+#
+# Tcl package index file
+#
+# Tcl 9 loads libtcl9@PACKAGE_NAME@..., Tcl 8.6 loads lib@PACKAGE_NAME@...
+# then sources the class bindings (library/biotext.tcl, installed next to
+# the library).
+#
+if {[package vsatisfies [package provide Tcl] 9.0-]} {
+    package ifneeded @PACKAGE_NAME@ @PACKAGE_VERSION@ \
+	"[list load [file join $dir @PKG_LIB_FILE9@] Biotext] ; [list source [file join $dir biotext.tcl]]"
+} else {
+    package ifneeded @PACKAGE_NAME@ @PACKAGE_VERSION@ \
+	"[list load [file join $dir @PKG_LIB_FILE8@] Biotext] ; [list source [file join $dir biotext.tcl]]"
+}
