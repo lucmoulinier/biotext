@@ -150,6 +150,9 @@ set nR 6
 biotext .b3 -width $nC -height $nR
 pack .b3
 update
+# the earlier gridded widgets left their size on the toplevel: drop it
+wm geometry . {}
+update
 
 set seqs {}
 for {set i 0} {$i < $nR} {incr i} {
