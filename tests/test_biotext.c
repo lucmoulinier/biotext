@@ -440,7 +440,7 @@ static void free_biotext_with_tag(Biotext *b) {
 static int tag_row_bounds(Biotext *b, int row, int *start, int *stop) {
     Tcl_Obj *rowObj;
     if (Tcl_ListObjIndex(b->interp, b->Tags[0].coords, row, &rowObj) != TCL_OK) return 0;
-    Tcl_Obj **v; int n;
+    Tcl_Obj **v; Tcl_Size n;
     if (Tcl_ListObjGetElements(b->interp, rowObj, &n, &v) != TCL_OK || n < 2) return 0;
     Tcl_GetIntFromObj(b->interp, v[0], start);
     Tcl_GetIntFromObj(b->interp, v[1], stop);

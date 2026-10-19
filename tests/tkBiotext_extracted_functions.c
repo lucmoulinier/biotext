@@ -1,4 +1,4 @@
-/* ==== BiotextInsertCols (from line 2768) ==== */
+/* ==== BiotextInsertCols (from line 3092) ==== */
 static int
 BiotextInsertCols(register Biotext *bioPtr,
 		  int index,
@@ -147,7 +147,19 @@ BiotextInsertCols(register Biotext *bioPtr,
 	}
 
 	for (i=i1; i<i2; i++) {
-	    sprintf(pos, "%d.%d", i, index);
+	    /* Bug fix: "i" is a 0-based row counter here, but the index
+	     * string parsed by BiotextGetIndex() (via
+	     * BiotextInsertGapsInTags) expects a 1-based row number (it
+	     * does "row -= 1" internally). Passing "i" directly meant
+	     * every row's index string was off by one: row 0 (the first
+	     * row) resolved, after the "-1", to row -1 which appears to
+	     * get clamped back to row 0 -- so the first row's tags were
+	     * updated on EVERY loop iteration (once per row in the
+	     * alignment) instead of just once, while every other row's
+	     * tags were never updated at all. Confirmed via a live test:
+	     * inserting columns shifted row 1's tag by 2x the requested
+	     * gap count, and row 2's tag didn't shift at all. */
+	    sprintf(pos, "%d.%d", i+1, index);
 	    BiotextInsertGapsInTags(bioPtr, pos, count);
 	}
 	//DumpCoordsTag(bioPtr, "sort insertcols");
@@ -156,7 +168,7 @@ BiotextInsertCols(register Biotext *bioPtr,
     return TCL_OK;
 }
 
-/* ==== BiotextInsertRows (from line 2942) ==== */
+/* ==== BiotextInsertRows (from line 3278) ==== */
 static int
 BiotextInsertRows(register Biotext *bioPtr,
 		  int index,
@@ -166,6 +178,7 @@ BiotextInsertRows(register Biotext *bioPtr,
     int i, j, nbs, iMap, before, len;
     int stop1, stop2, start;
     Tcl_Obj *tmpObj, *coordsObj;
+    Tcl_Size lenSz;
   
     nbs = bioPtr->nbSeqs + abs(count);
 
@@ -253,7 +266,8 @@ BiotextInsertRows(register Biotext *bioPtr,
 	    fprintf(stderr,"Insert in tag %d : %s\n", i, bioPtr->Tags[i].sname);
 #endif
 	    coordsObj = Tcl_DuplicateObj(bioPtr->Tags[i].coords);
-	    Tcl_ListObjLength(NULL, coordsObj, &len);
+	    Tcl_ListObjLength(NULL, coordsObj, &lenSz);
+	    len = (int)lenSz;
 #ifdef DEBUG_INSERTROW
 	    fprintf(stderr, "nb coords AVANT : %d\n", len);
 	    fflush(stderr);
@@ -261,7 +275,8 @@ BiotextInsertRows(register Biotext *bioPtr,
 	    Tcl_ListObjReplace(interp, coordsObj, index+1, 0, count, tmpObj3);
 	    bioPtr->Tags[i].coords = Tcl_DuplicateObj(coordsObj);
 #ifdef DEBUG_INSERTROW
-	    Tcl_ListObjLength(NULL, bioPtr->Tags[i].coords, &len);
+	    Tcl_ListObjLength(NULL, bioPtr->Tags[i].coords, &lenSz);
+	    len = (int)lenSz;
 	    fprintf(stderr, "len APRES : %d\n", len);
 	    fflush(stderr);
 #endif
@@ -273,7 +288,7 @@ BiotextInsertRows(register Biotext *bioPtr,
     return TCL_OK;
 }
 
-/* ==== BiotextDeleteColsGaps (from line 3170) ==== */
+/* ==== BiotextDeleteColsGaps (from line 3531) ==== */
 static int
 BiotextDeleteColsGaps(register Biotext *bioPtr) 
 {
@@ -306,7 +321,7 @@ BiotextDeleteColsGaps(register Biotext *bioPtr)
     return TCL_OK;
 }
 
-/* ==== BiotextDeleteCols (from line 3219) ==== */
+/* ==== BiotextDeleteCols (from line 3580) ==== */
 static int
 BiotextDeleteCols(register Biotext *bioPtr,
 		  int index) 
@@ -361,6 +376,7 @@ BiotextDeleteCols(register Biotext *bioPtr,
 
     /* change tags limits if necessary*/
     int k, nrows, nelt, start, stop;
+    Tcl_Size nrowsSz, neltSz;
     Tcl_Obj *coordsObj, *newRowObj, *rowObj, *newCoordsObj, **zonesObj;
 
 #ifdef DEBUG_DELCOLS
@@ -368,7 +384,8 @@ BiotextDeleteCols(register Biotext *bioPtr,
 #endif
     for (i=0; i< bioPtr->nbTags; i++) {
 	coordsObj = Tcl_DuplicateObj(bioPtr->Tags[i].coords);
-	Tcl_ListObjLength(interp, coordsObj, &nrows);
+	Tcl_ListObjLength(interp, coordsObj, &nrowsSz);
+	nrows = (int)nrowsSz;
 #ifdef DEBUG_DELCOLS
 	fprintf(stderr, "coords for %d rows\n", nrows);
 	fflush(stderr);
@@ -380,7 +397,8 @@ BiotextDeleteCols(register Biotext *bioPtr,
 	     * Using i here read the wrong row (or errored out silently
 	     * once i >= nrows for a given tag). */
 	    Tcl_ListObjIndex(interp, coordsObj, j, &rowObj);
-	    Tcl_ListObjGetElements(interp, rowObj, &nelt, &zonesObj);
+	    Tcl_ListObjGetElements(interp, rowObj, &neltSz, &zonesObj);
+	    nelt = (int)neltSz;
 	    newRowObj = Tcl_NewListObj(0, NULL);
 	    if (nelt > 0) {
 		for (k=0; k<nelt; k+=2) {
@@ -410,7 +428,7 @@ BiotextDeleteCols(register Biotext *bioPtr,
     return TCL_OK;
 }
 
-/* ==== BiotextDeleteRows (from line 3338) ==== */
+/* ==== BiotextDeleteRows (from line 3702) ==== */
 static int
 BiotextDeleteRows(register Biotext *bioPtr,
 		  int index) 
@@ -465,7 +483,7 @@ BiotextDeleteRows(register Biotext *bioPtr,
     return TCL_OK;
 }
 
-/* ==== BiotextCopyCmd (from line 3977) ==== */
+/* ==== BiotextCopyCmd (from line 4417) ==== */
 static int
 BiotextCopyCmd(register Biotext *bioPtr,
 	       Tcl_Interp *interp,
@@ -473,6 +491,7 @@ BiotextCopyCmd(register Biotext *bioPtr,
 	       Tcl_Obj * const objv[]) 
 {
     int nseq, i, val;
+    Tcl_Size nseqSz;
     Tcl_Obj **OIdx, **newIdx, *evalObj, *resObj;
 
     if (objc != 3) {
@@ -480,7 +499,8 @@ BiotextCopyCmd(register Biotext *bioPtr,
 	return TCL_ERROR;
     }
   
-    Tcl_ListObjLength(interp,objv[2],&nseq);
+    Tcl_ListObjLength(interp,objv[2],&nseqSz);
+    nseq = (int)nseqSz;
     if (nseq == 0) {
 	return TCL_OK;
     }
@@ -500,7 +520,8 @@ BiotextCopyCmd(register Biotext *bioPtr,
   
     resObj = Tcl_NewListObj(0, NULL);
     resObj = Tcl_GetObjResult(interp);
-    Tcl_ListObjGetElements(interp, resObj, &nseq, &OIdx);
+    Tcl_ListObjGetElements(interp, resObj, &nseqSz, &OIdx);
+    nseq = (int)nseqSz;
     Tcl_ResetResult(interp);
 
     /*
@@ -513,7 +534,8 @@ BiotextCopyCmd(register Biotext *bioPtr,
 	Tcl_ListObjAppendElement(NULL, resObj, Tcl_NewIntObj(val - 1));
     }
 
-    Tcl_ListObjGetElements(NULL, resObj, &nseq, &newIdx);
+    Tcl_ListObjGetElements(NULL, resObj, &nseqSz, &newIdx);
+    nseq = (int)nseqSz;
   
     /*
      * Initialize the copy buffer. 
@@ -525,7 +547,7 @@ BiotextCopyCmd(register Biotext *bioPtr,
     return TCL_OK;
 }
 
-/* ==== BiotextCutCmd (from line 4054) ==== */
+/* ==== BiotextCutCmd (from line 4498) ==== */
 static int
 BiotextCutCmd(register Biotext *bioPtr,
 	      Tcl_Interp *interp,
@@ -533,6 +555,7 @@ BiotextCutCmd(register Biotext *bioPtr,
 	      Tcl_Obj * const objv[]) 
 {
     int nseq, i, idx, val;
+    Tcl_Size nseqSz;
     Tcl_Obj **tmpOIdx, **OIdx, *resObj, *evalObj, *tmpObj;
   
     if (objc != 3) {
@@ -540,9 +563,10 @@ BiotextCutCmd(register Biotext *bioPtr,
 	return TCL_ERROR;
     }
 
-    if (Tcl_ListObjLength(interp, objv[2], &nseq) != TCL_OK) {
+    if (Tcl_ListObjLength(interp, objv[2], &nseqSz) != TCL_OK) {
 	return TCL_ERROR;
     }
+    nseq = (int)nseqSz;
     if (nseq == 0) {
 	return TCL_OK;
     }
@@ -567,18 +591,20 @@ BiotextCutCmd(register Biotext *bioPtr,
   
     resObj = Tcl_NewListObj(0, NULL);
     resObj = Tcl_GetObjResult(interp);
-    if (Tcl_ListObjGetElements(interp, resObj, &nseq, &tmpOIdx) != TCL_OK) {
+    if (Tcl_ListObjGetElements(interp, resObj, &nseqSz, &tmpOIdx) != TCL_OK) {
 	return TCL_ERROR;
     }
+    nseq = (int)nseqSz;
     tmpObj = Tcl_NewListObj(0, NULL);
     for (i=0; i<nseq; i++) {
 	Tcl_GetIntFromObj(interp, tmpOIdx[i], &val);
 	/* substract 1 to val as indices starts at 0 here */
 	Tcl_ListObjAppendElement(interp, tmpObj, Tcl_NewIntObj(val-1));
     }
-    if (Tcl_ListObjGetElements(interp, tmpObj, &nseq, &OIdx) != TCL_OK) {
+    if (Tcl_ListObjGetElements(interp, tmpObj, &nseqSz, &OIdx) != TCL_OK) {
 	return TCL_ERROR;
     }
+    nseq = (int)nseqSz;
 
     /*
      * Initialize the copy buffer. 
@@ -615,7 +641,7 @@ BiotextCutCmd(register Biotext *bioPtr,
     return TCL_OK;
 }
 
-/* ==== BiotextPasteCmd (from line 4160) ==== */
+/* ==== BiotextPasteCmd (from line 4608) ==== */
 static int
 BiotextPasteCmd(register Biotext *bioPtr,
 		Tcl_Interp *interp,
@@ -707,6 +733,7 @@ BiotextPasteCmd(register Biotext *bioPtr,
     }
 
     int nelt, iTag, iTagCache, len;
+    Tcl_Size neltSz, lenSz;
     char *tagName;
     Tcl_Obj *tagObj, *tmpObj, *tmpObj2, **tmpObj3;
     Tcl_Obj **eltObj;
@@ -722,21 +749,25 @@ BiotextPasteCmd(register Biotext *bioPtr,
 	    continue;
 	}
     
-	Tcl_ListObjGetElements(interp, bioPtr->TagsCache[iTagCache].coords, &nelt, &eltObj);
+	Tcl_ListObjGetElements(interp, bioPtr->TagsCache[iTagCache].coords, &neltSz, &eltObj);
+	nelt = (int)neltSz;
 	tmpObj = Tcl_NewListObj(0, NULL);
 	for (j=nelt-1; j>=0; j--) {
 	    Tcl_ListObjAppendElement(interp, tmpObj, Tcl_DuplicateObj(eltObj[j]));
 	}
-	Tcl_ListObjGetElements(interp, tmpObj, &nelt, &tmpObj3);
+	Tcl_ListObjGetElements(interp, tmpObj, &neltSz, &tmpObj3);
+	nelt = (int)neltSz;
     
 	tmpObj2 = Tcl_DuplicateObj(bioPtr->Tags[iTag].coords);
-	Tcl_ListObjLength(interp, tmpObj2, &len);
+	Tcl_ListObjLength(interp, tmpObj2, &lenSz);
+	len = (int)lenSz;
 #ifdef DEBUG_PASTECMD
 	fprintf(stderr, "%s : iTag %d\nnbr Coords before %d\n", tagName, iTag, len);
 #endif
 	Tcl_ListObjReplace(interp, tmpObj2, idx+1, nelt, nelt, tmpObj3);
 	bioPtr->Tags[iTag].coords = Tcl_DuplicateObj(tmpObj2);
-	Tcl_ListObjLength(interp, bioPtr->Tags[iTag].coords, &len);
+	Tcl_ListObjLength(interp, bioPtr->Tags[iTag].coords, &lenSz);
+	len = (int)lenSz;
 #ifdef DEBUG_PASTECMD
 	fprintf(stderr, "nbr Coords after  %d\n",len);
 	fflush(stderr);
@@ -754,7 +785,7 @@ BiotextPasteCmd(register Biotext *bioPtr,
     return TCL_OK;
 }
 
-/* ==== BiotextGetIndex (from line 4783) ==== */
+/* ==== BiotextGetIndex (from line 5361) ==== */
 static int
 BiotextGetIndex(register Biotext *bioPtr, 
 		char *str, 
@@ -766,6 +797,21 @@ BiotextGetIndex(register Biotext *bioPtr,
   
     //fprintf(stderr,"\nGetIndex:\nEnter with >%s<\n",str);
     //fflush(stderr);
+    /* Bug fix: on an empty widget (nbSeqs==0 or lgSeqs==0 -- e.g.
+     * before any sequence has ever been loaded), the clamping code
+     * below ("if (r >= bioPtr->nbSeqs) r = bioPtr->nbSeqs - 1;") used
+     * to silently produce r=-1/c=-1 while still returning TCL_OK, as
+     * if the index had been resolved successfully. Every caller of
+     * BiotextGetIndex() uses that -1 as a live array index afterward
+     * (bioPtr->SeqMat[r], bioPtr->SeqGrp[r], ...) -- confirmed by a
+     * real SIGSEGV in BiotextDelcharsCmd ("nGrp = bioPtr->SeqGrp[r];"
+     * with r=-1) when reproducing this under gdb. Reject any index on
+     * an empty widget up front instead of returning a bogus "success". */
+    if (bioPtr->nbSeqs <= 0 || bioPtr->lgSeqs <= 0) {
+	Tcl_AppendStringsToObj(Tcl_GetObjResult(bioPtr->interp),
+	    "bad index \"", str, "\": biotext widget is empty", (char *)NULL);
+	return TCL_ERROR;
+    }
     if (strcmp(str,"end") == 0) {
 	r = bioPtr->nbSeqs - 1;
 	c = bioPtr->lgSeqs - 1;
@@ -827,7 +873,7 @@ BiotextGetIndex(register Biotext *bioPtr,
     return TCL_ERROR;
 }
 
-/* ==== BiotextInitBuffer (from line 5321) ==== */
+/* ==== BiotextInitBuffer (from line 5954) ==== */
 static int
 BiotextInitBuffer(register Biotext *bioPtr,
 		  int nseq) 
@@ -928,7 +974,7 @@ BiotextInitBuffer(register Biotext *bioPtr,
     return TCL_OK;
 }
 
-/* ==== BiotextCopySeqsToBuffer (from line 5437) ==== */
+/* ==== BiotextCopySeqsToBuffer (from line 6070) ==== */
 static int
 BiotextCopySeqsToBuffer(register Biotext *bioPtr,
 			int nseqs,
@@ -972,7 +1018,7 @@ BiotextCopySeqsToBuffer(register Biotext *bioPtr,
     return TCL_OK;
 }
 
-/* ==== BiotextAddColsToBufferSeqs (from line 5495) ==== */
+/* ==== BiotextAddColsToBufferSeqs (from line 6128) ==== */
 static int
 BiotextAddColsToBufferSeqs(register Biotext *bioPtr,
 			   int ncols) 
@@ -1013,7 +1059,7 @@ BiotextAddColsToBufferSeqs(register Biotext *bioPtr,
     return TCL_OK;
 }
 
-/* ==== GetIndexOfTag (from line 5568) ==== */
+/* ==== GetIndexOfTag (from line 6239) ==== */
 static int
 GetIndexOfTag(register Biotext *bioPtr,
 	      char *tagName,
@@ -1060,7 +1106,7 @@ GetIndexOfTag(register Biotext *bioPtr,
     return iTag;
 }
 
-/* ==== BiotextInsertGapsInTags (from line 5695) ==== */
+/* ==== BiotextInsertGapsInTags (from line 6370) ==== */
 static int
 BiotextInsertGapsInTags(register Biotext *bioPtr,
 			char *index,
@@ -1068,6 +1114,7 @@ BiotextInsertGapsInTags(register Biotext *bioPtr,
 {
     Tcl_Interp *interp = bioPtr->interp;
     int i, k, start, stop, nval, row, col, right, nrow;
+    Tcl_Size nrowSz, nvalSz;
     Tcl_Obj *tmpObj, *coordsObj, *newObj, **valObj, **rowObj;
 
     if (BiotextGetIndex(bioPtr, index, &row, &col) != TCL_OK) {
@@ -1083,12 +1130,14 @@ BiotextInsertGapsInTags(register Biotext *bioPtr,
 
     for (i=0; i<bioPtr->nbTags; i++) {
 	coordsObj = Tcl_DuplicateObj(bioPtr->Tags[i].coords);
-	Tcl_ListObjGetElements(interp, coordsObj, &nrow, &rowObj);
+	Tcl_ListObjGetElements(interp, coordsObj, &nrowSz, &rowObj);
+	nrow = (int)nrowSz;
 	//Tcl_ListObjIndex(interp, coordsObj, row, &tmpObj);
 	tmpObj = Tcl_NewListObj(0, NULL);
 	tmpObj = Tcl_DuplicateObj(rowObj[row]);
 	//valObj = Tcl_NewListObj(0, NULL); 
-	Tcl_ListObjGetElements(interp, tmpObj, &nval, &valObj);
+	Tcl_ListObjGetElements(interp, tmpObj, &nvalSz, &valObj);
+	nval = (int)nvalSz;
 	newObj = Tcl_NewListObj(0, NULL);
 	for (k=0; k<nval; k+=2) {
 	    Tcl_GetIntFromObj(interp, valObj[k], &start);
@@ -1139,4 +1188,3 @@ BiotextInsertGapsInTags(register Biotext *bioPtr,
     //DumpCoordsTag(bioPtr, "sort insert gap in tags");
     return TCL_OK;
 }
-

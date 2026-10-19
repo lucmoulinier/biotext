@@ -18,6 +18,12 @@
 #define TEST_BIOTEXT_MIN_H
 
 #include <tcl.h>
+
+/* Tcl 9 uses Tcl_Size for list lengths; Tcl 8.6 has no such type
+ * (same shim as generic/tkBiotext.h). */
+#if TCL_MAJOR_VERSION < 9 && !defined(Tcl_Size)
+typedef int Tcl_Size;
+#endif
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
