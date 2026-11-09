@@ -1701,16 +1701,37 @@ BiotextAddSeqsCmd(register Biotext *bioPtr,
 	index = bioPtr->nbSeqs - 1;
     }
 
+    /* Bug fix: the index was never checked. Rows are inserted AFTER
+     * index, so it must be -1 (top) .. nbSeqs-1 (last row) ; a larger
+     * one (a selection made in another instance of Ordalie, row 149 of
+     * 107) made BiotextInsertRows() and the copy below write into rows
+     * that were never allocated : wish crashed (SIGSEGV). */
+    if (index < -1 || index > bioPtr->nbSeqs - 1) {
+	Tcl_SetObjResult(interp, Tcl_ObjPrintf(
+	    "addseqs : index %d out of range (-1 to %d)", index, bioPtr->nbSeqs - 1));
+	return TCL_ERROR;
+    }
+
     /* check inserted sequences */
-    Tcl_ListObjGetElements(interp,objv[2],&nseqSz,&OSeqMat);
+    if (Tcl_ListObjGetElements(interp,objv[2],&nseqSz,&OSeqMat) != TCL_OK) {
+	return TCL_ERROR;
+    }
     nseq = (int)nseqSz;
     if (nseq == 0) {
 	return TCL_OK;
     }
 
-    /* Get inserted sequence length */
-    Tcl_GetStringFromObj(OSeqMat[0],&slenSz);
-    slen = (int)slenSz;
+    /* Bug fix: only the length of the FIRST inserted sequence was taken
+     * into account, and every sequence is then copied with strcpy() into
+     * a row of lgSeqs+1 bytes : a longer one overflowed its row. The
+     * longest one now sets the length (shorter ones are padded below). */
+    slen = 0;
+    for (k=0; k<nseq; k++) {
+	Tcl_GetStringFromObj(OSeqMat[k],&slenSz);
+	if ((int)slenSz > slen) {
+	    slen = (int)slenSz;
+	}
+    }
 
 #ifdef DEBUG_ADDSEQS
     fprintf(stderr, "\n== BiotextAddSeqs =======\n");
@@ -1739,7 +1760,17 @@ BiotextAddSeqsCmd(register Biotext *bioPtr,
 
     /* fill alignement with new sequence */
     for(k=0, i=index+1; i<index+1+nseq; i++, k++) {
-	strcpy(bioPtr->SeqMat[i], Tcl_GetString(OSeqMat[k]));
+	{
+	    /* copy, padded with gaps to the alignment length */
+	    Tcl_Size lk;
+	    const char *sk = Tcl_GetStringFromObj(OSeqMat[k], &lk);
+	    int j;
+	    memcpy(bioPtr->SeqMat[i], sk, (size_t)lk);
+	    for (j=(int)lk; j<bioPtr->lgSeqs; j++) {
+		bioPtr->SeqMat[i][j] = '.';
+	    }
+	    bioPtr->SeqMat[i][bioPtr->lgSeqs] = '\0';
+	}
 	if (bioPtr->nbMapping > 0) {
 	    /* map the new sequences */
 	    /* Bug fix: bioPtr->MapSeq[i] was already allocated (and
@@ -2595,6 +2626,15 @@ BiotextInsertCmd(register Biotext *bioPtr,
 	} else {
 	    sscanf(iStr, "%d", &i);
 	}
+	/* same check for the columns */
+	if (count == 0) {
+	    return TCL_OK;
+	}
+	if (i < -1 || i > bioPtr->lgSeqs) {
+	    Tcl_SetObjResult(interp, Tcl_ObjPrintf(
+		"insert cols : index %d out of range", i));
+	    return TCL_ERROR;
+	}
 	result = BiotextInsertCols(bioPtr, i, count, -1);
 	break;
     case ICMD_ROWS:
@@ -2602,6 +2642,19 @@ BiotextInsertCmd(register Biotext *bioPtr,
 	    i = bioPtr->nbSeqs - 1;
 	} else {
 	    sscanf(iStr, "%d", &i);
+	}
+	/* Bug fix: the index was not checked. count > 0 inserts AFTER
+	 * row i (-1 .. nbSeqs-1), count < 0 BEFORE it (0 .. nbSeqs) : any
+	 * other row made BiotextInsertRows() write into rows that were
+	 * never allocated (wish crashed). */
+	if (count == 0) {
+	    return TCL_OK;
+	}
+	if ((count > 0 && (i < -1 || i > bioPtr->nbSeqs - 1)) ||
+	    (count < 0 && (i < 0 || i > bioPtr->nbSeqs))) {
+	    Tcl_SetObjResult(interp, Tcl_ObjPrintf(
+		"insert rows : index %d out of range", i));
+	    return TCL_ERROR;
 	}
 	result = BiotextInsertRows(bioPtr, i, count);
 	break;

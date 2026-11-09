@@ -579,3 +579,15 @@ vide : le chiffre tape n'etait pas pris. La liaison donne maintenant le
 chiffre lui-meme. Echap et un clic oublient le nombre deja tape (avant, il
 s'appliquait a l'action suivante). La correction n'etait que dans les copies
 d'Ordalie (lib/biotext1.0/biotext.tcl).
+
+Bug n. 73 (2026-11-09, plantage vu dans Ordalie, G8) : BiotextAddSeqsCmd et
+BiotextInsertCmd (insert rows) ne verifiaient pas l'index. Les lignes sont
+inserees APRES l'index (-1 a nbSeqs-1, ou AVANT pour un nombre negatif) ; un
+index au-dela (ligne 149 pour 107 lignes) faisait ecrire BiotextInsertRows et
+la copie dans des lignes jamais allouees : wish se terminait (SIGSEGV). Erreur
+Tcl maintenant. De plus addseqs ne prenait que la longueur de la premiere
+sequence inseree et copiait chacune avec strcpy : une suivante plus longue
+debordait de sa ligne ; la plus longue fixe maintenant la longueur et les plus
+courtes sont completees par des gaps. Test : tests/test_index_hors_limites.sh
+(28 cas, chacun dans un wish ; 4 plantaient avant, Tcl 8.6 et 9).
+
