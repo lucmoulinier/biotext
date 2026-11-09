@@ -38,6 +38,8 @@
 !/tests/build_real_widget.sh
 !/tests/test_advanced.tcl
 !/tests/test_misc.tcl
+!/tests/test_tag_add_memory.tcl
+!/tests/test_clean_tags.tcl
 !/tests/test_more.tcl
 !/tests/test_realistic_msa.tcl
 !/tests/test_tag_insert_push.tcl

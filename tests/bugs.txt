@@ -512,11 +512,23 @@ PORTAGE TEA 3.13 (2026-10-08)
     que les lignes restantes se decalaient (les derniers appels recevaient
     des index au-dela de la fin) : suppression de la fin vers le debut.
 
+70. [MOYENNE] BiotextCleanCmd - ordre des tags (listTags) jamais vide
+    "clean" liberait Tags[] et remettait nbTags a 0, mais gardait listTags
+    (ordre d'affichage, index dans Tags[]). Apres un "clean", la liste
+    commencait encore par les index des anciens tags et les nouveaux etaient
+    ajoutes a la fin ; les boucles d'affichage et de "tag names", bornees
+    par nbTags, ne les atteignaient pas des que l'on creait plus de tags
+    qu'avant : "tag names" donnait "Fnd Hel She Fnd Hel" et les derniers
+    tags n'etaient ni dessines ni supprimables. Visible dans Ordalie apres
+    File -> Reload : annotations Anno_* plus affichees ni cachables.
+    listTags est maintenant vide par "clean" (comme le fait deja "tag delete"
+    de tous les tags). Test : tests/test_clean_tags.tcl (2026-10-22).
+
 ================================================================================
  RESUME
 ================================================================================
 
-(Entrees 68 et 69 ajoutees le 2026-10-08, apres ce resume.)
+(Entrees 68 et 69 ajoutees le 2026-10-08, entree 70 le 2026-10-22, apres ce resume.)
 
 67 bugs distincts trouves et corriges au total (ce decompte precis differe
 legerement du chiffre "41" mentionne en cours de conversation, qui etait un
@@ -553,3 +565,17 @@ application utilisant Xft, non lie au code de ce widget.
 
 Note : la commande "selection" (BiotextSelectionCmd) n'a delibirement pas
 ete auditee ni testee, a la demande explicite de l'utilisateur.
+
+Bug n. 71 (2026-11-03, audit GUI d'Ordalie, B4) : BiotextTagAddSubCmd recopiait
+toute la liste de la ligne a chaque plage et ne liberait ni ces copies ni les
+anciennes coordonnees. Environ 15 Mo perdus par "tag add" sur une feature de
+conservation, avec un cout quadratique. Une ligne n'est plus dupliquee qu'une
+fois. Un index invalide laisse le tag intact. Test : tests/test_tag_add_memory.tcl
+(8 cycles : 10 Go perdus avant, 2 Mo apres ; Valgrind sans erreur).
+
+Bug n. 72 (2026-10-01, library/biotext.tcl, reporte dans les sources le
+2026-11-09) : "n fois" au clavier. Sur le pave numerique sans NumLock, %A est
+vide : le chiffre tape n'etait pas pris. La liaison donne maintenant le
+chiffre lui-meme. Echap et un clic oublient le nombre deja tape (avant, il
+s'appliquait a l'action suivante). La correction n'etait que dans les copies
+d'Ordalie (lib/biotext1.0/biotext.tcl).

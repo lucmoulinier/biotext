@@ -62,9 +62,12 @@ foreach c $Lc k $ckp {
     bind Biotext "<Shift-Key-$c>"    {::tk::biotext::bufferNTimes "add" %A}
     bind Biotext "<Key-KP_$c>" {::tk::biotext::bufferNTimes "add" %A}
     if {$::tcl_platform(platform) ne "windows" && ! [regexp {^macos} [::platform::generic]] } {
-	bind Biotext <Key-$k>  {::tk::biotext::bufferNTimes "add" %A}
+	# keypad without NumLock : %A is empty, the digit is given
+	bind Biotext <Key-$k>  [list ::tk::biotext::bufferNTimes "add" $c]
     }
 }
+# Escape forgets the number typed
+bind Biotext <Escape> {::tk::biotext::bufferNTimes "empty"}
 
 
 # bind mouse buttons
@@ -145,6 +148,8 @@ proc ::tk::biotext::cursor {w x y} {
 
 proc ::tk::biotext::button1 {w x y} {
     array set ::tk::biotext::Priv [list selectMode char mouseMoved 0 pressX $x pressY $y]
+    # a click forgets the number typed before
+    set ::tk::biotext::Priv(nInBuffer) ""
     $w cursor @$x,$y
     if {"disabled" ne [$w cget -state]} {
 	focus $w

@@ -5306,7 +5306,16 @@ BiotextCleanCmd(register Biotext *bioPtr,
      * BiotextTagConfigSubCmd at "bioPtr->Tags[iTag].Cfg = Cfg;" on
      * the first tag configured after a ".biotext clean". */
     bioPtr->nbTagsAlloc = 0;
-    
+    /* Bug fix: the display order of the tags (listTags, indices into
+     * Tags[]) was not emptied. After a "clean" (Ordalie : File ->
+     * Reload, or Close then Open), it still started with the indices
+     * of the old tags : "tag names" listed old names again ("Fnd Hel"
+     * twice) and the drawing and "tag names" loops, bounded by nbTags,
+     * never reached the new tags appended at the end (Ordalie
+     * annotations Anno_* neither displayed nor hidden after a reload).
+     * Same reset as in the "tag delete" of all the tags. */
+    bioPtr->listTags = Tcl_NewListObj(0, NULL);
+
     /* desallocate mapping */
     /* Bug fix: same leak pattern as above, for the residue mapping
      * table (see also BiotextMappingCmd's own fix for the identical
@@ -6774,7 +6783,8 @@ BiotextTagAddSubCmd(Biotext *bioPtr,
     Tcl_Size nrowSz;
     char *tagName, *index1, *index2;
     Tcl_Obj **rowObj, *coordsObj;
-    Tcl_Obj *tmpObj, *newObj;
+    Tcl_Obj *oldCoords, *newObj, **newRows;
+    int code = TCL_OK;
 
     if (bioPtr->nbSeqs == 0) {
 	Tcl_SetObjResult(interp, Tcl_ObjPrintf("The widget does not contain any sequences !"));
@@ -6800,11 +6810,16 @@ BiotextTagAddSubCmd(Biotext *bioPtr,
     
     //DumpCoordsTag(bioPtr, "entre TagAdd");
     /* read the indexes */
-    /* Bug fix: dead-store leak, same pattern already fixed elsewhere
-     * in this file -- the Tcl_NewListObj(0, NULL) result was
-     * immediately discarded/overwritten by the Tcl_DuplicateObj just
-     * below, leaking one Tcl_Obj per call. */
-    coordsObj = Tcl_DuplicateObj(bioPtr->Tags[iTag].coords);
+    /* Bug fix: each index pair duplicated the whole row list, and neither
+     * these copies nor the previous coords were ever released -- about
+     * 15 MB lost per "tag add" on a conservation feature (Ordalie audit,
+     * bug B4), with a cost quadratic in the number of zones of a row.
+     * A row is now duplicated once, on its first change. Rows left
+     * unchanged are shared with the old coords just long enough for
+     * these to be released, so every row ends with a single owner. */
+    oldCoords = bioPtr->Tags[iTag].coords;
+    coordsObj = Tcl_DuplicateObj(oldCoords);
+    Tcl_IncrRefCount(coordsObj);
     Tcl_ListObjGetElements(interp, coordsObj, &nrowSz, &rowObj);
     nrow = (int)nrowSz;
     if (nrow== 0) {
@@ -6815,6 +6830,8 @@ BiotextTagAddSubCmd(Biotext *bioPtr,
 	Tcl_ListObjGetElements(interp, coordsObj, &nrowSz, &rowObj);
 	nrow = (int)nrowSz;
     }
+    newRows = (Tcl_Obj **)ckalloc(nrow*sizeof(Tcl_Obj *));
+    memset(newRows, 0, nrow*sizeof(Tcl_Obj *));
     for (i=4; i<objc; i+=2) {
 	/* row numbering starts at 1 */
 	/* But BiotextGetIndex returns row and cols starting at 0 */
@@ -6828,16 +6845,19 @@ BiotextTagAddSubCmd(Biotext *bioPtr,
 	 * also silently discarding the "bad index" error message that
 	 * BiotextGetIndex had already set. */
 	if (BiotextGetIndex(bioPtr, index1, &row1, &col1) != TCL_OK) {
-	    return TCL_ERROR;
+	    code = TCL_ERROR;
+	    goto done;
 	}
 	index2 = Tcl_GetString(objv[i+1]);
 	if (BiotextGetIndex(bioPtr, index2, &row2, &col2) != TCL_OK) {
-	    return TCL_ERROR;
+	    code = TCL_ERROR;
+	    goto done;
 	}
 
 	if (row1 != row2) {
 	    Tcl_SetObjResult(interp, Tcl_ObjPrintf("\nError ! row1 should be equal to row2 !"));
-	    return TCL_ERROR;
+	    code = TCL_ERROR;
+	    goto done;
 	}
       
 	tmp = col1;
@@ -6852,42 +6872,32 @@ BiotextTagAddSubCmd(Biotext *bioPtr,
 	fflush(stderr);
 #endif
       
-	/* Bug fix: same dead-store leak as coordsObj above. */
-	tmpObj = Tcl_DuplicateObj(rowObj[row1]);
-	Tcl_ListObjAppendElement(interp, tmpObj, Tcl_NewIntObj(col1));
-	Tcl_ListObjAppendElement(interp, tmpObj, Tcl_NewIntObj(col2));
-
-	//Tcl_ListObjReplace(interp, bioPtr->Tags[iTag].coords, row1+1, 0, tmp+2, &rowObj);
-	rowObj[row1] = Tcl_DuplicateObj(tmpObj);
+	if (newRows[row1] == NULL) {
+	    newRows[row1] = Tcl_DuplicateObj(rowObj[row1]);
+	    Tcl_IncrRefCount(newRows[row1]);
+	}
+	Tcl_ListObjAppendElement(interp, newRows[row1], Tcl_NewIntObj(col1));
+	Tcl_ListObjAppendElement(interp, newRows[row1], Tcl_NewIntObj(col2));
     }
     newObj = Tcl_NewListObj(0, NULL);
     for (i=0; i<nrow; i++) {
-	Tcl_ListObjAppendElement(interp, newObj, Tcl_DuplicateObj(rowObj[i]));
-	/* Bug fix: rowObj[i] is a borrowed pointer into coordsObj's own
-	 * internal list representation (from Tcl_ListObjGetElements) for
-	 * every row that was NOT touched by the loop above; this
-	 * function never took an independent reference on those, so
-	 * decrementing them here (as the code used to do
-	 * unconditionally) could free a Tcl_Obj that is still shared
-	 * with the ORIGINAL bioPtr->Tags[iTag].coords list (coordsObj is
-	 * only a *shallow* duplicate: its row sub-lists are shared with
-	 * the original until this point) -- a use-after-free / heap
-	 * corruption risk, same class of bug already fixed twice
-	 * elsewhere in this file (BiotextInsertGapsInTags). For rows
-	 * that WERE modified above, rowObj[row1] does point to a fresh,
-	 * solely-owned duplicate this function created -- releasing it
-	 * would be correct -- but since both cases share the same
-	 * pointer array with no cheap way to tell them apart here, the
-	 * safe choice is to not decref at all: worst case a handful of
-	 * small Tcl_Obj allocations are left for Tcl to reclaim when
-	 * coordsObj itself eventually goes away, instead of risking
-	 * memory corruption. */
+	Tcl_ListObjAppendElement(interp, newObj, (newRows[i] != NULL) ? newRows[i] : rowObj[i]);
     }
-    bioPtr->Tags[iTag].coords = Tcl_DuplicateObj(newObj);
+    bioPtr->Tags[iTag].coords = newObj;
+    Tcl_DecrRefCount(oldCoords);
 
     //DumpCoordsTag(bioPtr, "fort TagAdd");
-  
-    return TCL_OK;
+
+ done:
+    for (i=0; i<nrow; i++) {
+	if (newRows[i] != NULL) {
+	    Tcl_DecrRefCount(newRows[i]);
+	}
+    }
+    ckfree((char *)newRows);
+    Tcl_DecrRefCount(coordsObj);
+
+    return code;
 }
 
 
